@@ -68,17 +68,22 @@ void set_graphics_mode(c64graphics_t graphics_mode) {
     *scr2 = byte_replace_bit(*scr2, 4, byte_select_bit(static_cast<uint8_t>(graphics_mode), 0));
 }
 
+void memset_img_sbm(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_mem_addr) {
+    data = &data[1];
+    for (c64ptr_t i = screen_mem_addr; i < screen_mem_addr + 1000; ++i) {
+        auto target = MAKE_VTPTR(uint8_t, i);
+        *target = data[i - screen_mem_addr + 8000];
+    }
+    for (c64ptr_t i = 0; i < 8000; ++i) {
+        auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i / 320 * 320 + i % 320 / 40 + i % 40 * 8);
+        *target = data[i];
+    }
+}
+
 void display_img_sbm(const uint8_t* data) {
-    set_graphics_mode(c64graphics_t::INVALID);
-    for (c64ptr_t i = 0x6000; i < 0x6000 + 8000; ++i) {
-        auto target = MAKE_VTPTR(uint8_t, i);
-        *target = data[i - 0x6000 + 1];
-    }
-    for (c64ptr_t i = 0x5c00; i < 0x5c00 + 1000; ++i) {
-        auto target = MAKE_VTPTR(uint8_t, i);
-        *target = data[i - 0x5c00 + 1 + 8000];
-    }
+    // set_graphics_mode(c64graphics_t::INVALID);
     set_graphics_mode(c64graphics_t::SBM);
+    memset_img_sbm(data, 0x6000, 0x5c00);
 }
 
 int main() {
