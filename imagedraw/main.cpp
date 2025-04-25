@@ -30,6 +30,11 @@ inline void set_border_color(c64color_t color) {
     *bcr = static_cast<uint8_t>(color);
 }
 
+inline void set_background_color(c64color_t color) {
+    auto bcr = MAKE_VTPTR(uint8_t, 0xd021);
+    *bcr = static_cast<uint8_t>(color);
+}
+
 bool byte_select_bit(uint8_t source, uint8_t idx) {
     return source & 1 << idx;
 }
@@ -86,7 +91,15 @@ void set_graphics_mode(c64graphics_t graphics_mode) {
     *scr2 = byte_replace_bits(*scr2, 4, byte_select_bit(static_cast<uint8_t>(graphics_mode), 0));
 }
 
-void memset_img_sbm(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_mem_addr) {
+void memset_color_ram(const uint8_t* data) {
+    data = &data[9001];
+    for (c64ptr_t i = 0xd800; i < 0xd800 + 1000; ++i) {
+        auto target = MAKE_VTPTR(uint8_t, i);
+        *target = data[i - 0xd800];
+    }
+}
+
+void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_mem_addr) {
     data = &data[1];
     for (c64ptr_t i = screen_mem_addr; i < screen_mem_addr + 1000; ++i) {
         auto target = MAKE_VTPTR(uint8_t, i);
@@ -99,24 +112,35 @@ void memset_img_sbm(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t scre
 }
 
 void display_img_sbm(const uint8_t* data) {
-    // set_graphics_mode(c64graphics_t::INVALID);
     set_graphics_mode(c64graphics_t::SBM);
-    memset_img_sbm(data, 0x6000, 0x5c00);
+    memset_img(data, 0x6000, 0x5c00);
+}
+
+void display_img_mbm(const uint8_t* data) {
+    set_graphics_mode(c64graphics_t::MBM);
+    set_background_color(static_cast<c64color_t>(data[10001]));
+    memset_color_ram(data);
+    memset_img(data, 0x6000, 0x5c00);
 }
 
 int main() {
+    set_border_color(c64color_t::BLACK);
     uint8_t metadata = img[0];
     if (byte_select_bit(metadata, 7)) { // Check the highest bit of the first byte of the image to see if it uses RLE.
         puts("Run length encoded image is not yet supported!");
         return 1;
     }
-    uint8_t graphics_mode = metadata & 0b111;
-    if (graphics_mode != static_cast<uint8_t>(c64graphics_t::SBM)) {
-        puts("Non standard bitmap mode is not yet supported!");
-        return 2;
+    c64graphics_t graphics_mode = static_cast<c64graphics_t>(metadata & 0b111);
+    switch (graphics_mode) {
+        case c64graphics_t::SBM:
+            display_img_sbm(img);
+            break;
+        case c64graphics_t::MBM:
+            display_img_mbm(img);
+            break;
+        default:
+            puts("Modes except SBM and MBM are not yet supported!");
+            return 2;
     }
-
-    set_border_color(c64color_t::BLACK);
-    display_img_sbm(img);
     return 0;
 }

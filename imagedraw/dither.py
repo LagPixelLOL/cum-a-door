@@ -70,7 +70,10 @@ class C64Colors(Enum):
     def get_array(cls):
         return np.array([c64color.rgb_normed for c64color in cls])
 
-def select_palette(img, n_select, palette):
+def select_palette(img, n_select, palette, global_colors=None):
+    is_chunked = len(img.shape) == 5
+    if not is_chunked:
+        img = np.expand_dims(img, (0, 1))
     chunk_y, chunk_x, region_y, region_x, n_channels = img.shape
     chunk_size = chunk_y * chunk_x
     img = img.reshape((chunk_size, region_y * region_x, n_channels))
@@ -81,7 +84,6 @@ def select_palette(img, n_select, palette):
         colors[i] = np.resize(color, (n_select, n_channels))
     colors = np.array(colors)
     for i, chunk in enumerate(colors):
-        selected_colors = set()
         candidates = []
         for color in chunk:
             candidate = []
@@ -92,6 +94,7 @@ def select_palette(img, n_select, palette):
             queue = collections.deque(maxlen=n_select)
             queue.extendleft(candidate)
             candidates.append(queue)
+        selected_colors = set() if global_colors is None else {tuple(global_color) for global_color in global_colors}
         while len(selected_colors) < n_select:
             dist = float("inf")
             index = None
@@ -114,24 +117,24 @@ def select_palette(img, n_select, palette):
     #         print(f"\033[48;2;{r};{g};{b}m  ", end="", flush=True)
     #     print("\033[0m")
     colors = colors.reshape((chunk_y, chunk_x, n_select, n_channels))
+    if not is_chunked:
+        colors = colors.squeeze((0, 1))
     return colors
 
 def chunk_view(x, side_y, side_x):
-    y_len, x_len, n_channels = x.shape
-    y_stride, x_stride, channel_stride = x.strides
     return np.lib.stride_tricks.as_strided(
         x,
-        (y_len // side_y, x_len // side_x, side_y, side_x, n_channels),
-        (y_stride * side_y, x_stride * side_x, y_stride, x_stride, channel_stride),
+        (x.shape[0] // side_y, x.shape[1] // side_x, side_y, side_x, *x.shape[2:]),
+        (x.strides[0] * side_y, x.strides[1] * side_x, x.strides[0], x.strides[1], *x.strides[2:]),
     )
 
-def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None):
+def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None, global_colors=None):
     img = img.copy()
     result = np.zeros_like(img)
     img_chunked = chunk_view(img, side_y, side_x)
     result_chunked = chunk_view(result, side_y, side_x)
     palette = C64Colors.get_array() if palette is None else palette
-    palette = select_palette(img_chunked, n_select, palette)
+    palette = select_palette(img_chunked, n_select, palette, global_colors)
     for y in range(side_y):
         for x in range(side_x):
             vec_errs = np.expand_dims(img_chunked[:, :, y, x], 2) - palette
@@ -148,41 +151,85 @@ def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None):
                 img_chunked[:, :, y + 1, x] += 5 / 16 * vec_errs
                 if x > 0:
                     img_chunked[:, :, y + 1, x - 1] += 3 / 16 * vec_errs
-    return result, result_chunked, palette
+    return result, palette
+
+def save_sbm_c64bmp(img, save_path, side_y, side_x, palette):
+    img = img.copy()
+    img_chunked = chunk_view(img, side_y, side_x)
+    img_chunked[...] = img_chunked == np.expand_dims(palette[:, :, 0, :], (2, 3))
+    img = np.packbits((img != 0).all(-1)).tobytes()
+    colors = np.zeros(palette.shape[:-1], dtype=np.uint8)
+    for c64color in C64Colors:
+        colors[(palette == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
+    colors[:, :, 0] <<= 4
+    colors = colors.sum(-1, dtype=np.uint8).tobytes()
+    with open(save_path, "wb") as f:
+        f.write(b"\x02")
+        f.write(img)
+        f.write(colors)
+
+def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors):
+    img_chunked = chunk_view(img, side_y, side_x)
+    result = np.zeros(img.shape[:-1], dtype=np.uint8)
+    result_chunked = chunk_view(result, side_y, side_x)
+    global_color = global_colors[0]
+    palette = palette[(palette != global_color).any(-1).nonzero()].reshape((*palette.shape[0:2], 3, palette.shape[3]))
+    for i in range(3):
+        result_chunked[(img_chunked == np.expand_dims(palette[:, :, i, :], (2, 3))).all(-1).nonzero()] = i + 1
+    result = result.reshape((result.shape[0], result.shape[1] // 4, 4))
+    for i in range(3):
+        result[:, :, i] <<= (3 - i) * 2
+    result = result.sum(-1, dtype=np.uint8).tobytes()
+    screen_ram = np.zeros((*palette.shape[0:2], 2), dtype=np.uint8)
+    color_ram = np.zeros(palette.shape[0:2], dtype=np.uint8)
+    for c64color in C64Colors:
+        screen_ram[(palette[:, :, 0:2, :] == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
+        color_ram[(palette[:, :, 2, :] == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
+        if not isinstance(global_color, bytes) and (global_color == c64color.rgb_normed).all():
+            global_color = np.uint8(c64color.id).tobytes()
+    screen_ram[:, :, 0] <<= 4
+    screen_ram = screen_ram.sum(-1, dtype=np.uint8).tobytes()
+    color_ram = color_ram.tobytes()
+    with open(save_path, "wb") as f:
+        f.write(b"\x03")
+        f.write(result)
+        f.write(screen_ram)
+        f.write(color_ram)
+        f.write(global_color)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Dither an image using Floyd-Steinberg algorithm.")
     parser.add_argument("-i", "--input", default="input.png", help="The path to the input image, default to \"input.png\"")
     parser.add_argument("-o", "--output", default="output.png", help="The path to save the processed image, use a path with extension \".c64bmp\" to save as c64bmp format, default to \"output.png\"")
-    parser.add_argument("-m", "--mode", default="colored", choices=["colored", "mono"], help="The path to save the processed image, default to \"output.png\"")
+    parser.add_argument("-m", "--mono", action="store_true", help="If set, use monochrome mode, otherwise use the full palette")
+    parser.add_argument("-s", "--sbm", action="store_true", help="If set, use standard bitmap mode, otherwise use multicolor bitmap mode")
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    img = np.array(scale_and_crop(args.input, 320, 200), dtype=np.float32) / 255
-    match args.mode:
-        case "colored":
-            palette = None
-        case "mono":
-            palette = np.array([C64Colors.BLACK.rgb_normed, C64Colors.WHITE.rgb_normed, C64Colors.DARK_GREY.rgb_normed, C64Colors.LIGHT_GREY.rgb_normed])
-        case _:
-            raise ValueError(f"Unknown mode \"{args.mode}\"!")
-    img, img_chunked, palette = floyd_steinberg_dither(img, 8, 8, 2, palette)
+    img = scale_and_crop(args.input, 320, 200)
+    if not args.sbm:
+        img = img.resize((320 // 2, 200), Image.LANCZOS)
+    img = np.array(img, dtype=np.float32) / 255
+    if args.mono:
+        palette = np.array([C64Colors.BLACK.rgb_normed, C64Colors.WHITE.rgb_normed, C64Colors.DARK_GREY.rgb_normed, C64Colors.GREY.rgb_normed, C64Colors.LIGHT_GREY.rgb_normed])
+    else:
+        palette = C64Colors.get_array()
+    if args.sbm:
+        global_colors = None
+    else:
+        global_colors = select_palette(img, 1, palette)
+    chunk_shape = (8, 8 if args.sbm else 4)
+    img, palette = floyd_steinberg_dither(img, *chunk_shape, 2 if args.sbm else 4, palette, global_colors)
     if os.path.splitext(args.output)[1] == ".c64bmp":
-        img_chunked[...] = img_chunked == np.expand_dims(palette[:, :, 0, :], (2, 3))
-        img = np.packbits((img != 0).all(-1)).tobytes()
-        colors = np.zeros(palette.shape[:-1], dtype=np.uint8)
-        for c64color in C64Colors:
-            matched_indices = (palette == c64color.rgb_normed).all(-1).nonzero()
-            colors[matched_indices] = c64color.id
-        colors[:, :, 0] <<= 4
-        colors = colors.sum(-1, dtype=np.uint8).tobytes()
-        with open(args.output, "wb") as f:
-            f.write(b"\x02")
-            f.write(img)
-            f.write(colors)
+        if args.sbm:
+            save_sbm_c64bmp(img, args.output, *chunk_shape, palette)
+            return
+        save_mbm_c64bmp(img, args.output, *chunk_shape, palette, global_colors)
         return
-    img = Image.fromarray((img * 255).astype(np.uint8))
+    if not args.sbm:
+        img = img.repeat(2, -2)
+    img = Image.fromarray((img * 255).astype(np.uint8)).resize((320 * 8, 200 * 8), Image.NEAREST)
     img.save(args.output)
 
 if __name__ == "__main__":
