@@ -62,10 +62,15 @@ class C64Colors(Enum):
     LIGHT_GREY = (0xF, (0x95, 0x95, 0x95))
 
     def __init__(self, id, rgb):
-        self.id = id
-        self.rgb = rgb
+        self.id = np.uint8(id)
+        self.rgb = np.array(rgb, dtype=np.uint8)
+        self.rgb_normed = self.rgb.astype(np.float32) / 255
 
-def select_palette(img, palette, n_select):
+    @classmethod
+    def get_array(cls):
+        return np.array([c64color.rgb_normed for c64color in cls])
+
+def select_palette(img, n_select, palette):
     chunk_y, chunk_x, region_y, region_x, n_channels = img.shape
     chunk_size = chunk_y * chunk_x
     img = img.reshape((chunk_size, region_y * region_x, n_channels))
@@ -111,59 +116,39 @@ def select_palette(img, palette, n_select):
     colors = colors.reshape((chunk_y, chunk_x, n_select, n_channels))
     return colors
 
-def chunk_view(x, chunk_side_len):
+def chunk_view(x, side_y, side_x):
     y_len, x_len, n_channels = x.shape
     y_stride, x_stride, channel_stride = x.strides
     return np.lib.stride_tricks.as_strided(
         x,
-        (y_len // chunk_side_len, x_len // chunk_side_len, chunk_side_len, chunk_side_len, n_channels),
-        (y_stride * chunk_side_len, x_stride * chunk_side_len, y_stride, x_stride, channel_stride),
+        (y_len // side_y, x_len // side_x, side_y, side_x, n_channels),
+        (y_stride * side_y, x_stride * side_x, y_stride, x_stride, channel_stride),
     )
 
-def floyd_steinberg_dither_colored(img):
+def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None):
     img = img.copy()
     result = np.zeros_like(img)
-    chunk_side_len = 8
-    img_chunked = chunk_view(img, chunk_side_len)
-    result_chunked = chunk_view(result, chunk_side_len)
-    palette = [np.array(e.rgb).astype(np.float32) / 255 for e in C64Colors]
-    palette = select_palette(img_chunked, palette, 2)
-    for y in range(chunk_side_len):
-        for x in range(chunk_side_len):
+    img_chunked = chunk_view(img, side_y, side_x)
+    result_chunked = chunk_view(result, side_y, side_x)
+    palette = C64Colors.get_array() if palette is None else palette
+    palette = select_palette(img_chunked, n_select, palette)
+    for y in range(side_y):
+        for x in range(side_x):
             vec_errs = np.expand_dims(img_chunked[:, :, y, x], 2) - palette
             errs = np.linalg.norm(vec_errs, axis=-1)
             min_indices = np.argmin(errs, -1, keepdims=True)
             sel_indices = np.expand_dims(np.repeat(min_indices, img.shape[-1], -1), -2)
             result_chunked[:, :, y, x] = np.squeeze(np.take_along_axis(palette, sel_indices, -2), -2)
             vec_errs = np.squeeze(np.take_along_axis(vec_errs, sel_indices, -2), -2)
-            if x + 1 < chunk_side_len:
+            if x + 1 < side_x:
                 img_chunked[:, :, y, x + 1] += 7 / 16 * vec_errs
-                if y + 1 < chunk_side_len:
+                if y + 1 < side_y:
                     img_chunked[:, :, y + 1, x + 1] += 1 / 16 * vec_errs
-            if y + 1 < chunk_side_len:
+            if y + 1 < side_y:
                 img_chunked[:, :, y + 1, x] += 5 / 16 * vec_errs
                 if x > 0:
                     img_chunked[:, :, y + 1, x - 1] += 3 / 16 * vec_errs
-    return result
-
-def floyd_steinberg_dither_mono(img):
-    y_len, x_len = img.shape
-    img = img.copy()
-    result = np.zeros_like(img)
-    for y in range(y_len):
-        for x in range(x_len):
-            quant_val = img[y, x] >= 0.5
-            quant_err = img[y, x] - quant_val
-            result[y, x] = quant_val
-            if x + 1 < x_len:
-                img[y, x + 1] += 7 / 16 * quant_err
-                if y + 1 < y_len:
-                    img[y + 1, x + 1] += 1 / 16 * quant_err
-            if y + 1 < y_len:
-                img[y + 1, x] += 5 / 16 * quant_err
-                if x > 0:
-                    img[y + 1, x - 1] += 3 / 16 * quant_err
-    return result
+    return result, result_chunked, palette
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Dither an image using Floyd-Steinberg algorithm.")
@@ -174,23 +159,29 @@ def parse_args():
 
 def main():
     args = parse_args()
-    img = scale_and_crop(args.input, 320, 200)
+    img = np.array(scale_and_crop(args.input, 320, 200), dtype=np.float32) / 255
     match args.mode:
         case "colored":
-            img = np.array(img).astype(np.float32) / 255
-            img = floyd_steinberg_dither_colored(img)
+            palette = None
         case "mono":
-            img = np.array(img.convert("L")).astype(np.float32) / 255
-            img = floyd_steinberg_dither_mono(img)
-            if os.path.splitext(args.output)[1] == ".c64bmp":
-                img = np.packbits(img != 0).tobytes()
-                with open(args.output, "wb") as f:
-                    f.write(b"\x02")
-                    f.write(img)
-                    f.write(b"\x10" * 1000)
-                    return
+            palette = np.array([C64Colors.BLACK.rgb_normed, C64Colors.WHITE.rgb_normed, C64Colors.DARK_GREY.rgb_normed, C64Colors.LIGHT_GREY.rgb_normed])
         case _:
             raise ValueError(f"Unknown mode \"{args.mode}\"!")
+    img, img_chunked, palette = floyd_steinberg_dither(img, 8, 8, 2, palette)
+    if os.path.splitext(args.output)[1] == ".c64bmp":
+        img_chunked[...] = img_chunked == np.expand_dims(palette[:, :, 0, :], (2, 3))
+        img = np.packbits((img != 0).all(-1)).tobytes()
+        colors = np.zeros(palette.shape[:-1], dtype=np.uint8)
+        for c64color in C64Colors:
+            matched_indices = (palette == c64color.rgb_normed).all(-1).nonzero()
+            colors[matched_indices] = c64color.id
+        colors[:, :, 0] <<= 4
+        colors = colors.sum(-1, dtype=np.uint8).tobytes()
+        with open(args.output, "wb") as f:
+            f.write(b"\x02")
+            f.write(img)
+            f.write(colors)
+        return
     img = Image.fromarray((img * 255).astype(np.uint8))
     img.save(args.output)
 
