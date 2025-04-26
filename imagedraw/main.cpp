@@ -93,9 +93,11 @@ void set_graphics_mode(c64graphics_t graphics_mode) {
 
 void memset_color_ram(const uint8_t* data) {
     data = &data[9001];
-    for (c64ptr_t i = 0xd800; i < 0xd800 + 1000; ++i) {
-        auto target = MAKE_VTPTR(uint8_t, i);
-        *target = data[i - 0xd800];
+    for (c64ptr_t i = 0; i < 500; ++i) {
+        auto target = MAKE_VTPTR(uint8_t, i * 2 + 0xd800);
+        *target = data[i] >> 4;
+        target = MAKE_VTPTR(uint8_t, i * 2 + 0xd801);
+        *target = data[i]; // No need to do & 0b1111 since the upper half is unused.
     }
 }
 
@@ -118,7 +120,7 @@ void display_img_sbm(const uint8_t* data) {
 
 void display_img_mbm(const uint8_t* data) {
     set_graphics_mode(c64graphics_t::MBM);
-    set_background_color(static_cast<c64color_t>(data[10001]));
+    set_background_color(static_cast<c64color_t>(data[9501]));
     memset_color_ram(data);
     memset_img(data, 0x6000, 0x5c00);
 }

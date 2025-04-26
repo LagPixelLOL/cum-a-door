@@ -189,7 +189,9 @@ def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors):
             global_color = np.uint8(c64color.id).tobytes()
     screen_ram[:, :, 0] <<= 4
     screen_ram = screen_ram.sum(-1, dtype=np.uint8).tobytes()
-    color_ram = color_ram.tobytes()
+    color_ram = color_ram.reshape((color_ram.shape[0], color_ram.shape[1] // 2, 2))
+    color_ram[:, :, 0] <<= 4
+    color_ram = color_ram.sum(-1, dtype=np.uint8).tobytes()
     with open(save_path, "wb") as f:
         f.write(b"\x03")
         f.write(result)
