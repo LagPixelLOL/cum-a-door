@@ -103,7 +103,7 @@ void memset_color_ram(const uint8_t* data) {
 
 void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_mem_addr) {
     bool native_order = byte_select_bit(data[0], 6);
-    data = &data[1];
+    ++data;
     for (c64ptr_t i = screen_mem_addr; i < screen_mem_addr + 1000; ++i) {
         auto target = MAKE_VTPTR(uint8_t, i);
         *target = data[i - screen_mem_addr + 8000];
@@ -114,22 +114,25 @@ void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_m
             *target = data[i];
         }
     } else {
-        c64ptr_t i = 0, j = 0, k = 0, l = 0;
-        while (i < 8000) {
-            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + j + k + l);
-            *target = data[i];
-            ++i;
-            if (i % 40 == 0) {
-                if (i % 320 == 0) {
-                    j += 320;
-                    k = 0;
-                } else {
-                    ++k;
+        c64ptr_t row_target = bitmap_mem_addr + 320 - 8, char_line_target = bitmap_mem_addr + 320 - 1, end_target = bitmap_mem_addr + 8000 - 1;
+        while (true) {
+            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr);
+            *target = *data++;
+            if (bitmap_mem_addr == row_target) {
+                if (bitmap_mem_addr == char_line_target) {
+                    if (bitmap_mem_addr == end_target) {
+                        break;
+                    }
+                    ++bitmap_mem_addr;
+                    row_target = bitmap_mem_addr + 320 - 8;
+                    char_line_target = bitmap_mem_addr + 320 - 1;
+                    continue;
                 }
-                l = 0;
-            } else {
-                l += 8;
+                bitmap_mem_addr -= 320 - 8 - 1;
+                ++row_target;
+                continue;
             }
+            bitmap_mem_addr += 8;
         }
     }
 }
