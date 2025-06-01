@@ -102,14 +102,22 @@ void memset_color_ram(const uint8_t* data) {
 }
 
 void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_mem_addr) {
+    bool native_order = byte_select_bit(data[0], 6);
     data = &data[1];
     for (c64ptr_t i = screen_mem_addr; i < screen_mem_addr + 1000; ++i) {
         auto target = MAKE_VTPTR(uint8_t, i);
         *target = data[i - screen_mem_addr + 8000];
     }
-    for (c64ptr_t i = 0; i < 8000; ++i) {
-        auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i / 320 * 320 + i % 320 / 40 + i % 40 * 8);
-        *target = data[i];
+    if (native_order) {
+        for (c64ptr_t i = 0; i < 8000; ++i) {
+            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i);
+            *target = data[i];
+        }
+    } else {
+        for (c64ptr_t i = 0; i < 8000; ++i) {
+            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i / 320 * 320 + i % 320 / 40 + i % 40 * 8);
+            *target = data[i];
+        }
     }
 }
 

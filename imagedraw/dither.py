@@ -153,22 +153,32 @@ def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None, global_c
                     img_chunked[:, :, y + 1, x - 1] += 3 / 16 * vec_errs
     return result, palette
 
-def save_sbm_c64bmp(img, save_path, side_y, side_x, palette):
+def make_native_order(img_packed):
+    img_packed = img_packed.reshape(-1)
+    result = np.zeros_like(img_packed)
+    for i, v in enumerate(img_packed):
+        result[i // 320 * 320 + i % 320 // 40 + i % 40 * 8] = v
+    return result
+
+def save_sbm_c64bmp(img, save_path, side_y, side_x, palette, native_order):
     img = img.copy()
     img_chunked = chunk_view(img, side_y, side_x)
     img_chunked[...] = img_chunked == np.expand_dims(palette[:, :, 0, :], (2, 3))
-    img = np.packbits((img != 0).all(-1)).tobytes()
+    img = np.packbits((img != 0).all(-1))
+    if native_order:
+        img = make_native_order(img)
+    img = img.tobytes()
     colors = np.zeros(palette.shape[:-1], dtype=np.uint8)
     for c64color in C64Colors:
         colors[(palette == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
     colors[:, :, 0] <<= 4
     colors = colors.sum(-1, dtype=np.uint8).tobytes()
     with open(save_path, "wb") as f:
-        f.write(b"\x02")
+        f.write(b"\x42" if native_order else b"\x02")
         f.write(img)
         f.write(colors)
 
-def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors):
+def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors, native_order):
     img_chunked = chunk_view(img, side_y, side_x)
     result = np.zeros(img.shape[:-1], dtype=np.uint8)
     result_chunked = chunk_view(result, side_y, side_x)
@@ -179,11 +189,14 @@ def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors):
     result = result.reshape((result.shape[0], result.shape[1] // 4, 4))
     for i in range(3):
         result[:, :, i] <<= (3 - i) * 2
-    result = result.sum(-1, dtype=np.uint8).tobytes()
-    screen_ram = np.zeros((*palette.shape[0:2], 2), dtype=np.uint8)
-    color_ram = np.zeros(palette.shape[0:2], dtype=np.uint8)
+    result = result.sum(-1, dtype=np.uint8)
+    if native_order:
+        result = make_native_order(result)
+    result = result.tobytes()
+    screen_ram = np.zeros((*palette.shape[:2], 2), dtype=np.uint8)
+    color_ram = np.zeros(palette.shape[:2], dtype=np.uint8)
     for c64color in C64Colors:
-        screen_ram[(palette[:, :, 0:2, :] == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
+        screen_ram[(palette[:, :, :2, :] == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
         color_ram[(palette[:, :, 2, :] == c64color.rgb_normed).all(-1).nonzero()] = c64color.id
         if not isinstance(global_color, bytes) and (global_color == c64color.rgb_normed).all():
             global_color = np.uint8(c64color.id).tobytes()
@@ -193,7 +206,7 @@ def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors):
     color_ram[:, :, 0] <<= 4
     color_ram = color_ram.sum(-1, dtype=np.uint8).tobytes()
     with open(save_path, "wb") as f:
-        f.write(b"\x03")
+        f.write(b"\x43" if native_order else b"\x03")
         f.write(result)
         f.write(screen_ram)
         f.write(color_ram)
@@ -205,6 +218,7 @@ def parse_args():
     parser.add_argument("-o", "--output", default="output.png", help="The path to save the processed image, use a path with extension \".c64bmp\" to save as c64bmp format, default to \"output.png\"")
     parser.add_argument("-m", "--mono", action="store_true", help="If set, use monochrome mode, otherwise use the full palette")
     parser.add_argument("-s", "--sbm", action="store_true", help="If set, use standard bitmap mode, otherwise use multicolor bitmap mode")
+    parser.add_argument("-n", "--native-order", action="store_true", help="If set, use native order, which is faster, otherwise use linear order")
     return parser.parse_args()
 
 def main():
@@ -225,9 +239,9 @@ def main():
     img, palette = floyd_steinberg_dither(img, *chunk_shape, 2 if args.sbm else 4, palette, global_colors)
     if os.path.splitext(args.output)[1] == ".c64bmp":
         if args.sbm:
-            save_sbm_c64bmp(img, args.output, *chunk_shape, palette)
+            save_sbm_c64bmp(img, args.output, *chunk_shape, palette, args.native_order)
             return
-        save_mbm_c64bmp(img, args.output, *chunk_shape, palette, global_colors)
+        save_mbm_c64bmp(img, args.output, *chunk_shape, palette, global_colors, args.native_order)
         return
     if not args.sbm:
         img = img.repeat(2, -2)
