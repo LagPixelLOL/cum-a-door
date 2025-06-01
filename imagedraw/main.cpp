@@ -64,7 +64,7 @@ constexpr uint8_t get_vic_memory_offset() {
         static_assert(bitmap_start_offset < 0x4000, "Bitmap memory offset must be less than 0x4000, since this is an offset inside the VIC bank partition!");
         static_assert(bitmap_start_offset % 0x2000 == 0, "Bitmap memory offset must start at multiple of 0x2000!");
         result = byte_replace_bits(result, 3, bitmap_start_offset / 0x2000);
-    } else if (chara_provided) {
+    } else if constexpr (chara_provided) {
         static_assert(character_start_offset < 0x4000, "Character memory offset must be less than 0x4000, since this is an offset inside the VIC bank partition!");
         static_assert(character_start_offset % 0x0800 == 0, "Character memory offset must start at multiple of 0x0800!");
         result = byte_replace_bits(result, 1, character_start_offset / 0x0800, 3);
@@ -92,7 +92,7 @@ void set_graphics_mode(c64graphics_t graphics_mode) {
 }
 
 void memset_color_ram(const uint8_t* data) {
-    data = &data[9001];
+    data += 9001;
     for (c64ptr_t i = 0; i < 500; ++i) {
         auto target = MAKE_VTPTR(uint8_t, i * 2 + 0xd800);
         *target = data[i] >> 4;
@@ -109,31 +109,36 @@ void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_m
         *target = data[i - screen_mem_addr + 8000];
     }
     if (native_order) {
-        for (c64ptr_t i = 0; i < 8000; ++i) {
-            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i);
-            *target = data[i];
-        }
-    } else {
-        c64ptr_t row_target = bitmap_mem_addr + 320 - 8, char_line_target = bitmap_mem_addr + 320 - 1, end_target = bitmap_mem_addr + 8000 - 1;
-        while (true) {
+        c64ptr_t end_target = bitmap_mem_addr + 8000;
+        for (; bitmap_mem_addr < end_target; ++bitmap_mem_addr) {
             auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr);
             *target = *data++;
-            if (bitmap_mem_addr == row_target) {
-                if (bitmap_mem_addr == char_line_target) {
-                    if (bitmap_mem_addr == end_target) {
-                        break;
-                    }
-                    ++bitmap_mem_addr;
-                    row_target = bitmap_mem_addr + 320 - 8;
-                    char_line_target = bitmap_mem_addr + 320 - 1;
-                    continue;
-                }
-                bitmap_mem_addr -= 320 - 8 - 1;
-                ++row_target;
-                continue;
-            }
-            bitmap_mem_addr += 8;
         }
+        return;
+    }
+    c64ptr_t end_target = bitmap_mem_addr + 8000 - 1;
+    --bitmap_mem_addr;
+    c64ptr_t row_target = bitmap_mem_addr;
+    c64ptr_t char_line_target = bitmap_mem_addr;
+    while (true) {
+        if (bitmap_mem_addr == row_target) {
+            if (bitmap_mem_addr == char_line_target) {
+                if (bitmap_mem_addr == end_target) {
+                    break;
+                }
+                ++bitmap_mem_addr;
+                row_target = bitmap_mem_addr + 320 - 8;
+                char_line_target = bitmap_mem_addr + 320 - 1;
+                goto memset;
+            }
+            bitmap_mem_addr -= 320 - 8 - 1;
+            ++row_target;
+            goto memset;
+        }
+        bitmap_mem_addr += 8;
+        memset:
+        auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr);
+        *target = *data++;
     }
 }
 
