@@ -114,9 +114,22 @@ void memset_img(const uint8_t* data, c64ptr_t bitmap_mem_addr, c64ptr_t screen_m
             *target = data[i];
         }
     } else {
-        for (c64ptr_t i = 0; i < 8000; ++i) {
-            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + i / 320 * 320 + i % 320 / 40 + i % 40 * 8);
+        c64ptr_t i = 0, j = 0, k = 0, l = 0;
+        while (i < 8000) {
+            auto target = MAKE_VTPTR(uint8_t, bitmap_mem_addr + j + k + l);
             *target = data[i];
+            ++i;
+            if (i % 40 == 0) {
+                if (i % 320 == 0) {
+                    j += 320;
+                    k = 0;
+                } else {
+                    ++k;
+                }
+                l = 0;
+            } else {
+                l += 8;
+            }
         }
     }
 }
