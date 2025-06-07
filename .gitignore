@@ -2,6 +2,10 @@
 *.prg.elf
 *.c64bmp
 *.png
+*.jpg
+
+llvm-mos-linux.tar.xz
+llvm-mos/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
