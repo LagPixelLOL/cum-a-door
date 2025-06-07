@@ -128,12 +128,11 @@ def chunk_view(x, side_y, side_x):
         (x.strides[0] * side_y, x.strides[1] * side_x, x.strides[0], x.strides[1], *x.strides[2:]),
     )
 
-def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=None, global_colors=None):
+def floyd_steinberg_dither(img, side_y, side_x, n_select, palette=C64Colors.get_array(), global_colors=None):
     img = img.copy()
     result = np.zeros_like(img)
     img_chunked = chunk_view(img, side_y, side_x)
     result_chunked = chunk_view(result, side_y, side_x)
-    palette = C64Colors.get_array() if palette is None else palette
     palette = select_palette(img_chunked, n_select, palette, global_colors)
     for y in range(side_y):
         for x in range(side_x):
