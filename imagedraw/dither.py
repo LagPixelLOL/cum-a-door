@@ -211,6 +211,9 @@ def save_mbm_c64bmp(img, save_path, side_y, side_x, palette, global_colors, nati
         f.write(color_ram)
         f.write(global_color)
 
+def use_c64bmp_format(path):
+    return os.path.splitext(path)[1] == ".c64bmp"
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Dither an image using Floyd-Steinberg algorithm.")
     parser.add_argument("-i", "--input", default="input.png", help="The path to the input image, default to \"input.png\"")
@@ -218,7 +221,12 @@ def parse_args():
     parser.add_argument("-m", "--mono", action="store_true", help="If set, use monochrome mode, otherwise use the full palette")
     parser.add_argument("-s", "--sbm", action="store_true", help="If set, use standard bitmap mode, otherwise use multicolor bitmap mode")
     parser.add_argument("-n", "--native-order", action="store_true", help="If set, use native order, which is faster, otherwise use linear order")
-    return parser.parse_args()
+    parser.add_argument("-a", "--all-colors", action="store_true", help="If set, allow all colors, this is incompatible with c64bmp format")
+    args = parser.parse_args()
+    if args.all_colors and use_c64bmp_format(args.output):
+        print("Cannot save as c64bmp format when using all colors!")
+        sys.exit(2)
+    return args
 
 def main():
     args = parse_args()
@@ -230,13 +238,16 @@ def main():
         palette = np.array([C64Colors.BLACK.rgb_normed, C64Colors.WHITE.rgb_normed, C64Colors.DARK_GREY.rgb_normed, C64Colors.GREY.rgb_normed, C64Colors.LIGHT_GREY.rgb_normed])
     else:
         palette = C64Colors.get_array()
-    if args.sbm:
+    if args.sbm or args.all_colors:
         global_colors = None
     else:
         global_colors = select_palette(img, 1, palette)
     chunk_shape = (8, 8 if args.sbm else 4)
-    img, palette = floyd_steinberg_dither(img, *chunk_shape, 2 if args.sbm else 4, palette, global_colors)
-    if os.path.splitext(args.output)[1] == ".c64bmp":
+    if args.all_colors:
+        chunk_shape = (chunk_shape[0] * 25, chunk_shape[1] * 40)
+    n_select = len(palette) if args.all_colors else 2 if args.sbm else 4
+    img, palette = floyd_steinberg_dither(img, *chunk_shape, n_select, palette, global_colors)
+    if use_c64bmp_format(args.output):
         if args.sbm:
             save_sbm_c64bmp(img, args.output, *chunk_shape, palette, args.native_order)
             return
